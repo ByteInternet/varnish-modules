@@ -1,4 +1,28 @@
-$Module tcp 3 TCP vmod
+..
+.. NB:  This file is machine generated, DO NOT EDIT!
+..
+.. Edit vmod.vcc and run make instead
+..
+
+.. role:: ref(emphasis)
+
+.. _vmod_tcp(3):
+
+========
+vmod_tcp
+========
+
+--------
+TCP vmod
+--------
+
+:Manual section: 3
+
+SYNOPSIS
+========
+
+import tcp [from "path"] ;
+
 DESCRIPTION
 ===========
 
@@ -11,7 +35,21 @@ Varnish Cache 4.1 and newer is supported.
 The VMOD is Linux-specific and requires a recent kernel to be useful. (>=3.13)
 
 
-$Function INT congestion_algorithm(STRING algorithm)
+CONTENTS
+========
+
+* :ref:`func_congestion_algorithm`
+* :ref:`func_dump_info`
+* :ref:`func_get_estimated_rtt`
+* :ref:`func_set_socket_pace`
+
+.. _func_congestion_algorithm:
+
+INT congestion_algorithm(STRING)
+--------------------------------
+
+Prototype
+	INT congestion_algorithm(STRING algorithm)
 
 Set the client socket congestion control algorithm to S. Returns 0 on success, and -1 on error.
 
@@ -22,7 +60,13 @@ Example::
     }
 
 
-$Function VOID dump_info()
+.. _func_dump_info:
+
+VOID dump_info()
+----------------
+
+Prototype
+	VOID dump_info()
 
 Write the contents of the TCP_INFO data structure into varnishlog.
 
@@ -32,7 +76,13 @@ Example
                 tcp.dump_info();
 
 
-$Function REAL get_estimated_rtt()
+.. _func_get_estimated_rtt:
+
+REAL get_estimated_rtt()
+------------------------
+
+Prototype
+	REAL get_estimated_rtt()
 
 Get the estimated round-trip-time for the client socket. Unit: milliseconds.
 
@@ -43,7 +93,13 @@ Example::
                 }
 
 
-$Function VOID set_socket_pace(INT)
+.. _func_set_socket_pace:
+
+VOID set_socket_pace(INT)
+-------------------------
+
+Prototype
+	VOID set_socket_pace(INT)
 
 Set socket pacing on client-side TCP connection to PACE KB/s. Network interface
 used must be using a supported scheduler. (fq)

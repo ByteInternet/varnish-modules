@@ -17,30 +17,40 @@ This collection contains the following vmods (previously kept individually):
 cookie, vsthrottle, header, saintmode, softpurge, tcp, var, xkey
 
 Supported Varnish version is described in the `CHANGES.rst` file. Normally this
-is the last public Varnish Cache release.
+is the last public Varnish Cache release. See PORTING below for information on
+support for other versions of Varnish.
 
 
 Installation
 ------------
 
+Source releases can be downloaded from:
+
+    https://download.varnish-software.com/varnish-modules/
+
+
 Installation requires an installed version of Varnish Cache, including the
-development files.
+development files. Requirements can be found in the `Varnish documentation`_.
+
+.. _`Varnish documentation`: https://www.varnish-cache.org/docs/4.1/installation/install.html#compiling-varnish-from-source
+
 
 Source code is built with autotools::
 
-    apt-get install libvarnishapi-dev || yum install varnish-libs-devel
-    ./bootstrap
+    sudo apt-get install libvarnishapi-dev || sudo yum install varnish-libs-devel
+    ./bootstrap   # If running from git.
     ./configure
-    make check
-    make install
+    make
+    make check   # optional
+    sudo make install
+
 
 The resulting loadable modules (``libvmod_foo*.so`` files) will be installed to
-the Varnish module directory. (default `/var/lib/varnish/vmods/`)
+the Varnish module directory. (default `/usr/lib/varnish/vmods/`)
 
 
 Usage
 -----
-
 
 Each module has a different set of functions and usage, described in
 separate documents in `docs/`. For completeness, here is a snippet from
@@ -65,6 +75,15 @@ The source git tree lives on Github: https://github.com/varnish/varnish-modules
 All source code is placed in the master git branch. Pull requests and issue
 reporting are appreciated.
 
+Porting
+-------
+
+We encourage porting of the module package to other versions of Varnish Cache.
+
+Nils Goroll has a git tree adopted to Varnish git master, which can be found
+on: https://github.com/nigoroll/varnish-modules/
+
+
 
 Administrativa
 --------------
@@ -84,9 +103,6 @@ Expressed non-goals are:
 
 Addition of further vmods is decided on a case-by-case basis. Code quality and
 maintenance requirements will be important in this decision.
-
-We encourage porting efforts to older Varnish Cache versions, if someone wants
-to do that. (and maintain it!)
 
 
 Contact

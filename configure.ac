@@ -1,6 +1,6 @@
 AC_PREREQ(2.59)
 AC_COPYRIGHT([Copyright (c) 2016 Varnish Software Group])
-AC_INIT([varnish-modules], [0.9.0])
+AC_INIT([varnish-modules], [0.9.1])
 AC_CONFIG_MACRO_DIR([m4])
 m4_ifndef([VARNISH_VMOD_INCLUDES], AC_MSG_ERROR([Need varnish.m4 -- see README.rst]))
 AM_CONFIG_HEADER(config.h)
@@ -56,6 +56,13 @@ PKG_CHECK_VAR([LIBVARNISHAPI_DATAROOTDIR], [varnishapi], [datarootdir])
 PKG_CHECK_VAR([LIBVARNISHAPI_BINDIR], [varnishapi], [bindir])
 PKG_CHECK_VAR([LIBVARNISHAPI_SBINDIR], [varnishapi], [sbindir])
 AC_SUBST([LIBVARNISHAPI_DATAROOTDIR])
+
+PKG_CHECK_VAR([VARNISH_PLUS], [varnishapi], [varnish_plus],
+  [
+    AC_DEFINE([VARNISH_PLUS], [true], [Varnish Plus build])
+    AC_SUBST([VARNISH_PLUS], [true])
+  ], [])
+
 
 # Varnish include files tree
 VARNISH_VMOD_INCLUDES

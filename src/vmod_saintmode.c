@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2013-2015 Varnish Software Group
+ * Copyright (c) 2013-2015 Varnish Software
  * All rights reserved.
  *
  * Author: Dag Haavi Finstad <daghf@varnish-software.com>
@@ -68,6 +68,7 @@ VCL_BACKEND __match_proto__(td_saintmode_saintmode_backend)
 vmod_saintmode_backend(VRT_CTX, struct vmod_saintmode_saintmode *sm) {
 	CHECK_OBJ_NOTNULL(sm, VMOD_SAINTMODE_MAGIC);
 	CHECK_OBJ_NOTNULL(sm->sdir, DIRECTOR_MAGIC);
+	(void)ctx;
 	return (sm->sdir);
 }
 
@@ -122,6 +123,8 @@ vmod_blacklist(VRT_CTX, struct vmod_priv *priv, VCL_DURATION expires) {
 	sm->n_trouble++;
 	pthread_mutex_unlock(&sm->mtx);
 }
+
+unsigned healthy(const struct director *, const struct busyobj *, double *);
 
 /* All adapted from PHK's saintmode implementation in Varnish 3.0 */
 unsigned __match_proto__(vdi_healthy_f)
@@ -183,6 +186,7 @@ resolve(const struct director *dir, struct worker *wrk, struct busyobj *bo) {
 
 	CHECK_OBJ_NOTNULL(dir, DIRECTOR_MAGIC);
 	CAST_OBJ_NOTNULL(sm, dir->priv, VMOD_SAINTMODE_MAGIC);
+	(void)wrk;
 
 	if (!healthy(dir, bo, &changed))
 		return (NULL);
@@ -196,6 +200,7 @@ vmod_saintmode__init(VRT_CTX, struct vmod_saintmode_saintmode **smp,
     VCL_INT threshold) {
 	struct vmod_saintmode_saintmode *sm;
 	struct saintmode_objs *sm_objs;
+	(void)ctx;
 
 	AN(smp);
 	AZ(*smp);
