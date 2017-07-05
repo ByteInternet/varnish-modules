@@ -1,0 +1,6 @@
+varnish-modules (0.9.1) unstable; urgency=low
+
+  * Add debian packaging
+
+ -- Rick van de Loo <rickvandeloo@gmail.com>  Wed, 5 Jul 2017 13:43:57 +0100
+

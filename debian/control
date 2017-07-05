@@ -1,0 +1,17 @@
+Source: varnish-modules
+Section: web
+Priority: extra
+Maintainer: Rick van de Loo <rick@byte.nl>
+Build-Depends: debhelper (>= 9),
+ build-essential,
+ pkg-config,
+ python-docutils,
+ varnish (>= 4.0.2),
+ libvarnishapi-dev (>= 4.0.2)
+Standards-Version: 3.9.2
+Vcs-Git: git://github.com/byteinternet/varnish-modules.git
+
+Package: varnish-modules
+Architecture: any
+Depends: varnish (>= 4.0.2), ${shlibs:Depends}, ${misc:Depends}, ${Varnish:ABI}
+Description: Collection of Varnish Cache modules (vmods) by Varnish Software
