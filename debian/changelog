@@ -1,3 +1,9 @@
+varnish-modules (0.9.0-3hypernode20200326.110703) unstable; urgency=medium
+
+  * Use our own built 4.1.3 Varnish version for Debian Buster
+
+ -- Rick van de Loo <vdloo@workstation4>  Thu, 26 Mar 2020 10:02:12 +0200
+
 varnish-modules (0.9.0-3) unstable; urgency=medium
 
   * Declare compliance with Debian policy 3.9.8
