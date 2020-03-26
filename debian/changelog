@@ -1,3 +1,9 @@
+varnish-modules (20200326.085241) UNRELEASED; urgency=medium
+
+  * UNRELEASED
+
+ -- Hypernode team <hypernode@byte.nl>  Thu, 26 Mar 2020 08:52:42 +0100
+
 varnish-modules (0.9.1) unstable; urgency=low
 
   * Add debian packaging
