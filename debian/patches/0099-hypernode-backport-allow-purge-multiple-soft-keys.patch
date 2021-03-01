@@ -1,0 +1,556 @@
+Description: Backport xkey soft purge multiople keys
+ See https://github.com/varnish/varnish-modules/commit/f723b4c25f292fcad85c9fac88e20d64e2d08ea0
+ .
+ varnish-modules (0.9.0-3hypernode20210301.162245) unstable; urgency=medium
+ .
+   * Backport Allow xkey [soft] purge of multiple keys
+Author: Rick van de Loo <vdloo@workstation4>
+
+---
+The information above should follow the Patch Tagging Guidelines, please
+checkout http://dep.debian.net/deps/dep3/ to learn about the format. Here
+are templates for supplementary fields that you might want to add:
+
+Origin: <vendor|upstream|other>, <url of original patch>
+Bug: <url in upstream bugtracker>
+Bug-Debian: https://bugs.debian.org/<bugnumber>
+Bug-Ubuntu: https://launchpad.net/bugs/<bugnumber>
+Forwarded: <no|not-needed|url proving that it has been forwarded>
+Reviewed-By: <name and email of someone who approved the patch>
+Last-Update: 2021-03-01
+
+--- /dev/null
++++ varnish-modules-0.9.0/src/tests/xkey/test07.vtc
+@@ -0,0 +1,56 @@
++varnishtest "Test xkey vmod multiple objects purging multiple keys"
++
++server s1 {
++	rxreq
++	txresp -hdr "xkey: 1000  2000	3000"
++	rxreq
++	txresp -hdr "xkey: 4000	   5000 6000"
++	rxreq
++	txresp -hdr "xkey:  7000  8000  9000"
++} -start
++
++varnish v1 -vcl+backend {
++	import xkey from "${vmod_builddir}/.libs/libvmod_xkey.so";
++
++	sub vcl_recv {
++		if (req.http.xkey-purge) {
++			if (xkey.purge(req.http.xkey-purge) != 0) {
++				return (synth(200, "Purged"));
++			} else {
++				return (synth(404, "No key"));
++			}
++		}
++	}
++
++	sub vcl_backend_response {
++		set beresp.ttl = 60s;
++		set beresp.grace = 0s;
++		set beresp.keep = 0s;
++	}
++
++	sub vcl_synth {
++		set resp.http.reason = resp.reason;
++	}
++} -start
++
++client c1 {
++	txreq -url "/one"
++	rxresp
++	txreq -url "/two"
++	rxresp
++	txreq -url "/three"
++	rxresp
++} -run
++
++varnish v1 -expect n_object == 3
++
++client c1 {
++	txreq -hdr "xkey-purge:	1000  5000	9000"
++	rxresp
++	expect resp.status == 200
++	expect resp.http.reason == "Purged"
++} -run
++
++delay 1
++
++varnish v1 -expect n_object == 0
+--- /dev/null
++++ varnish-modules-0.9.0/src/tests/xkey/test08.vtc
+@@ -0,0 +1,48 @@
++varnishtest "Test xkey vmod purge non-existant key"
++
++server s1 {
++	rxreq
++	txresp -hdr "xkey: asdf fdsa"
++} -start
++
++varnish v1 -vcl+backend {
++	import xkey from "${vmod_builddir}/.libs/libvmod_xkey.so";
++
++	sub vcl_recv {
++		if (req.http.xkey-purge) {
++			if (xkey.purge(req.http.xkey-purge) != 0) {
++				return (synth(200, "Purged"));
++			} else {
++				return (synth(404, "No key"));
++			}
++		}
++	}
++
++	sub vcl_backend_response {
++		set beresp.ttl = 60s;
++		set beresp.grace = 0s;
++		set beresp.keep = 0s;
++	}
++
++	sub vcl_synth {
++		set resp.http.reason = resp.reason;
++	}
++} -start
++
++client c1 {
++	txreq
++	rxresp
++} -run
++
++varnish v1 -expect n_object == 1
++
++client c1 {
++	txreq -hdr "xkey-purge: xyz"
++	rxresp
++	expect resp.status == 404
++	expect resp.http.reason == "No key"
++} -run
++
++delay 1
++
++varnish v1 -expect n_object == 1
+--- varnish-modules-0.9.0.orig/src/vmod_xkey.c
++++ varnish-modules-0.9.0/src/vmod_xkey.c
+@@ -1,5 +1,5 @@
+ /*-
+- * Copyright (c) 2015 Varnish Software Group
++ * Copyright (c) 2015 Varnish Software
+  * All rights reserved.
+  *
+  * Author: Martin Blix Grydeland <martin@varnish-software.com>
+@@ -34,6 +34,7 @@
+ #include "vrt.h"
+ #include "cache/cache.h"
+ #include "vsha256.h"
++#include "config.h"
+ 
+ #include "vtree.h"
+ 
+@@ -129,7 +130,7 @@ xkey_ptrcmp(const struct xkey_ptrkey *k1
+ }
+ 
+ static struct xkey_hashhead *
+-xkey_hashhead_new()
++xkey_hashhead_new(void)
+ {
+ 	struct xkey_hashhead *head;
+ 
+@@ -165,7 +166,7 @@ xkey_hashhead_delete(struct xkey_hashhea
+ }
+ 
+ static struct xkey_ochead *
+-xkey_ochead_new()
++xkey_ochead_new(void)
+ {
+ 	struct xkey_ochead *head;
+ 
+@@ -200,7 +201,7 @@ xkey_ochead_delete(struct xkey_ochead **
+ }
+ 
+ static struct xkey_oc *
+-xkey_oc_new()
++xkey_oc_new(void)
+ {
+ 	struct xkey_oc *oc;
+ 
+@@ -351,7 +352,7 @@ xkey_remove(struct xkey_ochead **pochead
+ }
+ 
+ static void
+-xkey_cleanup()
++xkey_cleanup(void)
+ {
+ 	struct xkey_hashkey *hashkey;
+ 	struct xkey_hashhead *hashhead;
+@@ -394,8 +395,29 @@ xkey_cleanup()
+ 
+ /**************************/
+ 
++static unsigned
++xkey_tok(const char **b, const char **e)
++{
++	const char *t;
++
++	AN(b);
++	AN(e);
++
++	t = *b;
++	AN(t);
++
++	while (isblank(*t))
++		t++;
++	*b = t;
++
++	while (*t != '\0' && !isblank(*t))
++		t++;
++	*e = t;
++	return (*b < *e);
++}
++
+ static void
+-xkey_cb_insert(struct worker *wrk, struct objcore *objcore, void *priv)
++xkey_cb_insert(struct worker *wrk, struct objcore *objcore)
+ {
+ 	SHA256_CTX sha_ctx;
+ 	unsigned char digest[DIGEST_LEN];
+@@ -403,8 +425,6 @@ xkey_cb_insert(struct worker *wrk, struc
+ 	const char hdr_h2[] = "X-HashTwo:";
+ 	const char *ep, *sp;
+ 
+-	(void)priv;
+-
+ 	CHECK_OBJ_NOTNULL(objcore, OBJCORE_MAGIC);
+ 
+ 	HTTP_FOREACH_PACK(wrk, objcore, sp) {
+@@ -414,14 +434,7 @@ xkey_cb_insert(struct worker *wrk, struc
+ 		sp = strchr(sp, ':');
+ 		AN(sp);
+ 		sp++;
+-		while (*sp != '\0') {
+-			while (*sp == ' ')
+-				sp++;
+-			ep = sp;
+-			while (*ep != '\0' && *ep != ' ')
+-				ep++;
+-			if (sp == ep)
+-				break;
++		while (xkey_tok(&sp, &ep)) {
+ 			SHA256_Init(&sha_ctx);
+ 			SHA256_Update(&sha_ctx, sp, ep - sp);
+ 			SHA256_Final(digest, &sha_ctx);
+@@ -434,13 +447,10 @@ xkey_cb_insert(struct worker *wrk, struc
+ }
+ 
+ static void
+-xkey_cb_remove(struct worker *wrk, struct objcore *objcore, void *priv)
++xkey_cb_remove(struct objcore *objcore)
+ {
+ 	struct xkey_ochead *ochead;
+ 
+-	(void)wrk;
+-	(void)priv;
+-
+ 	CHECK_OBJ_NOTNULL(objcore, OBJCORE_MAGIC);
+ 
+ 	AZ(pthread_mutex_lock(&mtx));
+@@ -450,28 +460,50 @@ xkey_cb_remove(struct worker *wrk, struc
+ 	AZ(pthread_mutex_unlock(&mtx));
+ }
+ 
++#if defined VARNISH_PLUS || !defined OEV_INSERT
+ static void __match_proto__(exp_callback_f)
+ xkey_cb(struct worker *wrk, struct objcore *objcore,
+     enum exp_event_e event, void *priv)
+ {
+ 
+-	(void)wrk;
+-	(void)objcore;
+-	(void)event;
+-	(void)priv;
++	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
++	CHECK_OBJ_NOTNULL(objcore, OBJCORE_MAGIC);
++	AZ(priv);
+ 
+ 	switch (event) {
+ 	case EXP_INSERT:
+ 	case EXP_INJECT:
+-		xkey_cb_insert(wrk, objcore, priv);
++		xkey_cb_insert(wrk, objcore);
+ 		break;
+ 	case EXP_REMOVE:
+-		xkey_cb_remove(wrk, objcore, priv);
++		xkey_cb_remove(objcore);
+ 		break;
+ 	default:
+ 		WRONG("enum exp_event_e");
+ 	}
+ }
++#else
++static void __match_proto__(obj_event_f)
++xkey_cb(struct worker *wrk, void *priv, struct objcore *oc, unsigned ev)
++{
++
++	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
++	CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
++	AZ(priv);
++	AN(ev);
++
++	switch (ev) {
++	case OEV_INSERT:
++		xkey_cb_insert(wrk, oc);
++		break;
++	case OEV_EXPIRE:
++		xkey_cb_remove(oc);
++		break;
++	default:
++		WRONG("Unexpected event");
++	}
++}
++#endif
+ 
+ /**************************/
+ 
+@@ -482,40 +514,66 @@ purge(VRT_CTX, VCL_STRING key, VCL_INT d
+ 	unsigned char digest[DIGEST_LEN];
+ 	struct xkey_hashhead *hashhead;
+ 	struct xkey_oc *oc;
+-	int i;
++	const char *ep, *sp;
++	int i = 0;
+ 
+ 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
++	CHECK_OBJ_NOTNULL(ctx->req, REQ_MAGIC);
++	CHECK_OBJ_NOTNULL(ctx->req->wrk, WORKER_MAGIC);
+ 
+ 	if (!key || !*key)
+ 		return (0);
+-
+-	SHA256_Init(&sha_ctx);
+-	SHA256_Update(&sha_ctx, key, strlen(key));
+-	SHA256_Final(digest, &sha_ctx);
+-
++	sp = key;
+ 	AZ(pthread_mutex_lock(&mtx));
+-	hashhead = xkey_hashtree_lookup(digest, sizeof(digest));
+-	if (hashhead == NULL) {
+-		AZ(pthread_mutex_unlock(&mtx));
+-		return (0);
+-	}
+-	i = 0;
+-	VTAILQ_FOREACH(oc, &hashhead->ocs, list_hashhead) {
+-		CHECK_OBJ_NOTNULL(oc->objcore, OBJCORE_MAGIC);
+-		if (oc->objcore->flags & OC_F_BUSY)
+-			continue;
+-		if (do_soft &&
+-		    oc->objcore->exp.ttl <= (ctx->now - oc->objcore->exp.t_origin))
+-			continue;
+-		if (do_soft)
+-			EXP_Rearm(oc->objcore, ctx->now, 0,
+-			    oc->objcore->exp.grace, oc->objcore->exp.keep);
+-		else
+-			EXP_Rearm(oc->objcore, oc->objcore->exp.t_origin, 0,
+-			    0, 0);
+-		i++;
++	while (xkey_tok(&sp, &ep)) {
++		SHA256_Init(&sha_ctx);
++		SHA256_Update(&sha_ctx, sp, ep - sp);
++		SHA256_Final(digest, &sha_ctx);
++
++		hashhead = xkey_hashtree_lookup(digest, sizeof(digest));
++		if (hashhead != NULL) {
++			VTAILQ_FOREACH(oc, &hashhead->ocs, list_hashhead) {
++				CHECK_OBJ_NOTNULL(oc->objcore, OBJCORE_MAGIC);
++				if (oc->objcore->flags & OC_F_BUSY)
++					continue;
++#if defined HAVE_OBJCORE_EXP
++				if (do_soft && oc->objcore->exp.ttl <=
++				    (ctx->now - oc->objcore->exp.t_origin))
++					continue;
++#else
++				if (do_soft &&
++				    oc->objcore->exp.ttl <= (ctx->now - oc->objcore->exp.t_origin))
++					continue;
++#endif
++#ifdef VARNISH_PLUS
++				if (do_soft)
++					EXP_Rearm(ctx->req->wrk, oc->objcore, ctx->now, 0,
++					    oc->objcore->exp.grace, oc->objcore->exp.keep);
++				else
++					EXP_Rearm(ctx->req->wrk, oc->objcore,
++					    oc->objcore->exp.t_origin, 0, 0, 0);
++#elif defined HAVE_OBJCORE_EXP
++				if (do_soft)
++					EXP_Rearm(oc->objcore, ctx->now, 0,
++					    oc->objcore->exp.grace, oc->objcore->exp.keep);
++				else
++					EXP_Rearm(oc->objcore, oc->objcore->exp.t_origin,
++					    0, 0, 0);
++#else
++				if (do_soft)
++					EXP_Rearm(oc->objcore, ctx->now, 0,
++					    oc->objcore->exp.grace, oc->objcore->exp.keep);
++				else
++					EXP_Rearm(oc->objcore, oc->objcore->exp.t_origin,
++					    0, 0, 0);
++#endif
++				i++;
++			}
++		}
++		sp = ep;
+ 	}
+ 	AZ(pthread_mutex_unlock(&mtx));
++
+ 	return (i);
+ }
+ 
+@@ -540,11 +598,15 @@ vmod_event(VRT_CTX, struct vmod_priv *pr
+ 	switch (e) {
+ 	case VCL_EVENT_LOAD:
+ 		AZ(pthread_mutex_lock(&mtx));
+-		if (n_init == 0) {
++		if (n_init == 0)
++#if defined VARNISH_PLUS || !defined OEV_INSERT
+ 			xkey_cb_handle =
+ 			    EXP_Register_Callback(xkey_cb, NULL);
+-			AN(xkey_cb_handle);
+-		}
++#else
++			xkey_cb_handle = ObjSubscribeEvents(xkey_cb, NULL,
++			    OEV_INSERT|OEV_EXPIRE);
++#endif
++		AN(xkey_cb_handle);
+ 		n_init++;
+ 		AZ(pthread_mutex_unlock(&mtx));
+ 		break;
+@@ -552,10 +614,14 @@ vmod_event(VRT_CTX, struct vmod_priv *pr
+ 		AZ(pthread_mutex_lock(&mtx));
+ 		assert(n_init > 0);
+ 		n_init--;
++		AN(xkey_cb_handle);
+ 		if (n_init == 0) {
+ 			/* Do cleanup */
+-			AN(xkey_cb_handle);
++#if defined VARNISH_PLUS || !defined OEV_INSERT
+ 			EXP_Deregister_Callback(&xkey_cb_handle);
++#else
++			ObjUnsubscribeEvents(&xkey_cb_handle);
++#endif
+ 			AZ(xkey_cb_handle);
+ 			xkey_cleanup();
+ 		}
+--- varnish-modules-0.9.0.orig/src/vmod_xkey.vcc
++++ varnish-modules-0.9.0/src/vmod_xkey.vcc
+@@ -1,4 +1,111 @@
+ $Module xkey 3 Surrogate keys support for Varnish Cache
++DESCRIPTION
++===========
++
++This vmod adds secondary hashes to objects, allowing fast purging on
++all objects with this hash key.
++
++You can use this to indicate relationships, a bit like a "tag". Then
++clear out all object that have this tag set. Two good use cases are
++news sites, where one might add all the stories mentioned on a
++particular page by article ID, letting each article referenced create
++an xkey header.
++
++Similarly with an e-commerce site, where various SKUs are often
++referenced on a page.
++
++Hash keys are specified in the ``xkey`` response header. Multiple keys
++can be specified per header line with a space
++separator. Alternatively, they can be specified in multiple ``xkey``
++response headers.
++
++Preferably the secondary hash keys are set from the backend
++application, but can also be set from VCL in ``vcl_backend_response``
++as in the above example.
++
++.. vcl-start
++
++VCL example::
++
++    vcl 4.0;
++    import xkey;
++
++    backend default { .host = "192.0.2.11"; .port = "8080"; }
++
++    acl purgers {
++        "203.0.113.0"/24;
++    }
++
++    sub vcl_recv {
++        if (req.method == "PURGE") {
++            if (client.ip !~ purgers) {
++                return (synth(403, "Forbidden"));
++            }
++            set req.http.n-gone = xkey.purge(req.http.key);
++            # or: set req.http.n-gone = xkey.softpurge(req.http.key)
++
++            return (synth(200, "Invalidated "+req.http.n-gone+" objects"));
++        }
++    }
++
++.. vcl-end
++
++
++Example
++-------
++
++On an e-commerce site we have the backend application issue an xkey
++header for every product that is referenced on that page. So the
++header for a certain page might look like this::
++
++    HTTP/1.1 OK
++    Server: Apache/2.2.15
++    xkey: 8155054
++    xkey: 166412
++    xkey: 234323
++
++This requires a bit of VCL to be in place. The VCL can be found above.
++
++Then, in order to keep the web in sync with the database, a trigger is
++set up in the database. When an SKU is updated this will trigger an
++HTTP request towards the Varnish server, clearing out every object
++with the matching xkey header::
++
++    GET / HTTP/1.1
++    Host: www.example.com
++    xkey-purge: 166412
++
++Note the xkey-purge header. It is probably a good idea to protect
++this with an ACL so random people from the Internet cannot purge your
++cache.
++
++Varnish will find the objects and clear them out, responding with::
++
++    HTTP/1.1 200 Purged
++    Date: Thu, 24 Apr 2014 17:08:28 GMT
++    X-Varnish: 1990228115
++    Via: 1.1 Varnish
++
++The objects are now cleared.
++
+ $Event vmod_event
+-$Function INT purge(STRING)
+-$Function INT softpurge(STRING)
++
++$Function INT purge(STRING keys)
++
++Description
++        Purges all objects hashed on any key found in the ``keys`` argument.
++        Returns the number of objects that were purged.
++
++        The ``keys`` may contain a list of space-separated ids.
++
++
++$Function INT softpurge(STRING keys)
++
++Description
++        Performs a "soft purge" for all objects hashed on any key found in the
++        ``keys`` argument.  Returns the number of objects that were purged.
++
++        A softpurge differs from a regular purge in that it resets an
++        object's TTL but keeps it available for grace mode and conditional
++        requests for the remainder of its configured grace and keep time.
++
