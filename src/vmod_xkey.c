@@ -542,7 +542,7 @@ purge(VRT_CTX, VCL_STRING key, VCL_INT do_soft)
 					continue;
 #else
 				if (do_soft &&
-				    oc->objcore->ttl <= (ctx->now - oc->objcore->t_origin))
+				    oc->objcore->exp.ttl <= (ctx->now - oc->objcore->exp.t_origin))
 					continue;
 #endif
 #ifdef VARNISH_PLUS
@@ -562,9 +562,9 @@ purge(VRT_CTX, VCL_STRING key, VCL_INT do_soft)
 #else
 				if (do_soft)
 					EXP_Rearm(oc->objcore, ctx->now, 0,
-					    oc->objcore->grace, oc->objcore->keep);
+					    oc->objcore->exp.grace, oc->objcore->exp.keep);
 				else
-					EXP_Rearm(oc->objcore, oc->objcore->t_origin,
+					EXP_Rearm(oc->objcore, oc->objcore->exp.t_origin,
 					    0, 0, 0);
 #endif
 				i++;
