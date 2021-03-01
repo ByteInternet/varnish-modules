@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2015 Varnish Software Group
+ * Copyright (c) 2015 Varnish Software
  * All rights reserved.
  *
  * Author: Martin Blix Grydeland <martin@varnish-software.com>
@@ -34,6 +34,7 @@
 #include "vrt.h"
 #include "cache/cache.h"
 #include "vsha256.h"
+#include "config.h"
 
 #include "vtree.h"
 
@@ -129,7 +130,7 @@ xkey_ptrcmp(const struct xkey_ptrkey *k1, const struct xkey_ptrkey *k2)
 }
 
 static struct xkey_hashhead *
-xkey_hashhead_new()
+xkey_hashhead_new(void)
 {
 	struct xkey_hashhead *head;
 
@@ -165,7 +166,7 @@ xkey_hashhead_delete(struct xkey_hashhead **phead)
 }
 
 static struct xkey_ochead *
-xkey_ochead_new()
+xkey_ochead_new(void)
 {
 	struct xkey_ochead *head;
 
@@ -200,7 +201,7 @@ xkey_ochead_delete(struct xkey_ochead **phead)
 }
 
 static struct xkey_oc *
-xkey_oc_new()
+xkey_oc_new(void)
 {
 	struct xkey_oc *oc;
 
@@ -351,7 +352,7 @@ xkey_remove(struct xkey_ochead **pochead)
 }
 
 static void
-xkey_cleanup()
+xkey_cleanup(void)
 {
 	struct xkey_hashkey *hashkey;
 	struct xkey_hashhead *hashhead;
@@ -394,16 +395,35 @@ xkey_cleanup()
 
 /**************************/
 
+static unsigned
+xkey_tok(const char **b, const char **e)
+{
+	const char *t;
+
+	AN(b);
+	AN(e);
+
+	t = *b;
+	AN(t);
+
+	while (isblank(*t))
+		t++;
+	*b = t;
+
+	while (*t != '\0' && !isblank(*t))
+		t++;
+	*e = t;
+	return (*b < *e);
+}
+
 static void
-xkey_cb_insert(struct worker *wrk, struct objcore *objcore, void *priv)
+xkey_cb_insert(struct worker *wrk, struct objcore *objcore)
 {
 	SHA256_CTX sha_ctx;
 	unsigned char digest[DIGEST_LEN];
 	const char hdr_xkey[] = "xkey:";
 	const char hdr_h2[] = "X-HashTwo:";
 	const char *ep, *sp;
-
-	(void)priv;
 
 	CHECK_OBJ_NOTNULL(objcore, OBJCORE_MAGIC);
 
@@ -414,14 +434,7 @@ xkey_cb_insert(struct worker *wrk, struct objcore *objcore, void *priv)
 		sp = strchr(sp, ':');
 		AN(sp);
 		sp++;
-		while (*sp != '\0') {
-			while (*sp == ' ')
-				sp++;
-			ep = sp;
-			while (*ep != '\0' && *ep != ' ')
-				ep++;
-			if (sp == ep)
-				break;
+		while (xkey_tok(&sp, &ep)) {
 			SHA256_Init(&sha_ctx);
 			SHA256_Update(&sha_ctx, sp, ep - sp);
 			SHA256_Final(digest, &sha_ctx);
@@ -434,12 +447,9 @@ xkey_cb_insert(struct worker *wrk, struct objcore *objcore, void *priv)
 }
 
 static void
-xkey_cb_remove(struct worker *wrk, struct objcore *objcore, void *priv)
+xkey_cb_remove(struct objcore *objcore)
 {
 	struct xkey_ochead *ochead;
-
-	(void)wrk;
-	(void)priv;
 
 	CHECK_OBJ_NOTNULL(objcore, OBJCORE_MAGIC);
 
@@ -450,28 +460,50 @@ xkey_cb_remove(struct worker *wrk, struct objcore *objcore, void *priv)
 	AZ(pthread_mutex_unlock(&mtx));
 }
 
+#if defined VARNISH_PLUS || !defined OEV_INSERT
 static void __match_proto__(exp_callback_f)
 xkey_cb(struct worker *wrk, struct objcore *objcore,
     enum exp_event_e event, void *priv)
 {
 
-	(void)wrk;
-	(void)objcore;
-	(void)event;
-	(void)priv;
+	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
+	CHECK_OBJ_NOTNULL(objcore, OBJCORE_MAGIC);
+	AZ(priv);
 
 	switch (event) {
 	case EXP_INSERT:
 	case EXP_INJECT:
-		xkey_cb_insert(wrk, objcore, priv);
+		xkey_cb_insert(wrk, objcore);
 		break;
 	case EXP_REMOVE:
-		xkey_cb_remove(wrk, objcore, priv);
+		xkey_cb_remove(objcore);
 		break;
 	default:
 		WRONG("enum exp_event_e");
 	}
 }
+#else
+static void __match_proto__(obj_event_f)
+xkey_cb(struct worker *wrk, void *priv, struct objcore *oc, unsigned ev)
+{
+
+	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
+	CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
+	AZ(priv);
+	AN(ev);
+
+	switch (ev) {
+	case OEV_INSERT:
+		xkey_cb_insert(wrk, oc);
+		break;
+	case OEV_EXPIRE:
+		xkey_cb_remove(oc);
+		break;
+	default:
+		WRONG("Unexpected event");
+	}
+}
+#endif
 
 /**************************/
 
@@ -482,40 +514,66 @@ purge(VRT_CTX, VCL_STRING key, VCL_INT do_soft)
 	unsigned char digest[DIGEST_LEN];
 	struct xkey_hashhead *hashhead;
 	struct xkey_oc *oc;
-	int i;
+	const char *ep, *sp;
+	int i = 0;
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+	CHECK_OBJ_NOTNULL(ctx->req, REQ_MAGIC);
+	CHECK_OBJ_NOTNULL(ctx->req->wrk, WORKER_MAGIC);
 
 	if (!key || !*key)
 		return (0);
-
-	SHA256_Init(&sha_ctx);
-	SHA256_Update(&sha_ctx, key, strlen(key));
-	SHA256_Final(digest, &sha_ctx);
-
+	sp = key;
 	AZ(pthread_mutex_lock(&mtx));
-	hashhead = xkey_hashtree_lookup(digest, sizeof(digest));
-	if (hashhead == NULL) {
-		AZ(pthread_mutex_unlock(&mtx));
-		return (0);
-	}
-	i = 0;
-	VTAILQ_FOREACH(oc, &hashhead->ocs, list_hashhead) {
-		CHECK_OBJ_NOTNULL(oc->objcore, OBJCORE_MAGIC);
-		if (oc->objcore->flags & OC_F_BUSY)
-			continue;
-		if (do_soft &&
-		    oc->objcore->exp.ttl <= (ctx->now - oc->objcore->exp.t_origin))
-			continue;
-		if (do_soft)
-			EXP_Rearm(oc->objcore, ctx->now, 0,
-			    oc->objcore->exp.grace, oc->objcore->exp.keep);
-		else
-			EXP_Rearm(oc->objcore, oc->objcore->exp.t_origin, 0,
-			    0, 0);
-		i++;
+	while (xkey_tok(&sp, &ep)) {
+		SHA256_Init(&sha_ctx);
+		SHA256_Update(&sha_ctx, sp, ep - sp);
+		SHA256_Final(digest, &sha_ctx);
+
+		hashhead = xkey_hashtree_lookup(digest, sizeof(digest));
+		if (hashhead != NULL) {
+			VTAILQ_FOREACH(oc, &hashhead->ocs, list_hashhead) {
+				CHECK_OBJ_NOTNULL(oc->objcore, OBJCORE_MAGIC);
+				if (oc->objcore->flags & OC_F_BUSY)
+					continue;
+#if defined HAVE_OBJCORE_EXP
+				if (do_soft && oc->objcore->exp.ttl <=
+				    (ctx->now - oc->objcore->exp.t_origin))
+					continue;
+#else
+				if (do_soft &&
+				    oc->objcore->ttl <= (ctx->now - oc->objcore->t_origin))
+					continue;
+#endif
+#ifdef VARNISH_PLUS
+				if (do_soft)
+					EXP_Rearm(ctx->req->wrk, oc->objcore, ctx->now, 0,
+					    oc->objcore->exp.grace, oc->objcore->exp.keep);
+				else
+					EXP_Rearm(ctx->req->wrk, oc->objcore,
+					    oc->objcore->exp.t_origin, 0, 0, 0);
+#elif defined HAVE_OBJCORE_EXP
+				if (do_soft)
+					EXP_Rearm(oc->objcore, ctx->now, 0,
+					    oc->objcore->exp.grace, oc->objcore->exp.keep);
+				else
+					EXP_Rearm(oc->objcore, oc->objcore->exp.t_origin,
+					    0, 0, 0);
+#else
+				if (do_soft)
+					EXP_Rearm(oc->objcore, ctx->now, 0,
+					    oc->objcore->grace, oc->objcore->keep);
+				else
+					EXP_Rearm(oc->objcore, oc->objcore->t_origin,
+					    0, 0, 0);
+#endif
+				i++;
+			}
+		}
+		sp = ep;
 	}
 	AZ(pthread_mutex_unlock(&mtx));
+
 	return (i);
 }
 
@@ -540,11 +598,15 @@ vmod_event(VRT_CTX, struct vmod_priv *priv, enum vcl_event_e e)
 	switch (e) {
 	case VCL_EVENT_LOAD:
 		AZ(pthread_mutex_lock(&mtx));
-		if (n_init == 0) {
+		if (n_init == 0)
+#if defined VARNISH_PLUS || !defined OEV_INSERT
 			xkey_cb_handle =
 			    EXP_Register_Callback(xkey_cb, NULL);
-			AN(xkey_cb_handle);
-		}
+#else
+			xkey_cb_handle = ObjSubscribeEvents(xkey_cb, NULL,
+			    OEV_INSERT|OEV_EXPIRE);
+#endif
+		AN(xkey_cb_handle);
 		n_init++;
 		AZ(pthread_mutex_unlock(&mtx));
 		break;
@@ -552,10 +614,14 @@ vmod_event(VRT_CTX, struct vmod_priv *priv, enum vcl_event_e e)
 		AZ(pthread_mutex_lock(&mtx));
 		assert(n_init > 0);
 		n_init--;
+		AN(xkey_cb_handle);
 		if (n_init == 0) {
 			/* Do cleanup */
-			AN(xkey_cb_handle);
+#if defined VARNISH_PLUS || !defined OEV_INSERT
 			EXP_Deregister_Callback(&xkey_cb_handle);
+#else
+			ObjUnsubscribeEvents(&xkey_cb_handle);
+#endif
 			AZ(xkey_cb_handle);
 			xkey_cleanup();
 		}
